@@ -1,8 +1,28 @@
-const CORS = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'POST, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type',
-};
+const ALLOWED_ORIGINS = ['https://nsai.tech', 'https://www.nsai.tech'];
+
+function corsHeaders(origin) {
+  const allowed = ALLOWED_ORIGINS.includes(origin) ? origin : ALLOWED_ORIGINS[0];
+  return {
+    'Access-Control-Allow-Origin': allowed,
+    'Access-Control-Allow-Methods': 'POST, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type',
+    'Vary': 'Origin',
+  };
+}
+
+// In-memory rate limit per IP (resets per Worker instance — best-effort, not distributed)
+const rateLimitMap = new Map();
+function isRateLimited(ip) {
+  const now = Date.now();
+  const windowMs = 60_000;
+  const maxReqs = 12;
+  const entry = rateLimitMap.get(ip) || { count: 0, start: now };
+  if (now - entry.start > windowMs) { rateLimitMap.set(ip, { count: 1, start: now }); return false; }
+  if (entry.count >= maxReqs) return true;
+  entry.count++;
+  rateLimitMap.set(ip, entry);
+  return false;
+}
 
 const SYSTEM_PROMPTS = {
   pricing: `You are NUB — NSAI's sales operator at nsai.tech. Be direct, confident, and close the sale.
@@ -98,11 +118,22 @@ async function handleChat(request, env) {
 
 export default {
   async fetch(request, env) {
+    const origin = request.headers.get('Origin') || '';
+    const cors = corsHeaders(origin);
+
     if (request.method === 'OPTIONS') {
-      return new Response(null, { headers: CORS });
+      return new Response(null, { headers: cors });
     }
     if (request.method !== 'POST') {
       return new Response('Not found', { status: 404 });
+    }
+
+    const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
+    if (isRateLimited(ip)) {
+      return new Response(JSON.stringify({ error: 'Too many requests. Try again in a minute.' }), {
+        status: 429,
+        headers: { 'Content-Type': 'application/json', ...cors }
+      });
     }
 
     const url = new URL(request.url);
@@ -115,12 +146,12 @@ export default {
         text = await handleDemo(request, env);
       }
       return new Response(JSON.stringify({ response: text }), {
-        headers: { 'Content-Type': 'application/json', ...CORS }
+        headers: { 'Content-Type': 'application/json', ...cors }
       });
     } catch (err) {
       return new Response(JSON.stringify({ response: 'NUB encountered an issue. Try again.' }), {
         status: 200,
-        headers: { 'Content-Type': 'application/json', ...CORS }
+        headers: { 'Content-Type': 'application/json', ...cors }
       });
     }
   }
