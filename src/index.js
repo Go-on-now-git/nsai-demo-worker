@@ -89,9 +89,25 @@ Name: ${name || 'there'}`;
   return data.content?.[0]?.text || 'NUB is standing by — try again in a moment.';
 }
 
+async function notifyLead(env, route, firstMessage) {
+  if (!env.TG_BOT_TOKEN || !env.TG_CHAT_ID) return;
+  const text = `🔥 <b>NSAI Lead</b>\n\n<b>Route:</b> ${route}\n<b>Message:</b> ${firstMessage?.substring(0,200) || '(none)'}\n<b>Time:</b> ${new Date().toISOString()}`;
+  fetch(`https://api.telegram.org/bot${env.TG_BOT_TOKEN}/sendMessage`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ chat_id: env.TG_CHAT_ID, text, parse_mode: 'HTML' })
+  }).catch(() => {});
+}
+
 async function handleChat(request, env) {
   const { messages = [], route = 'general', init } = await request.json();
   const systemPrompt = SYSTEM_PROMPTS[route] || SYSTEM_PROMPTS.general;
+
+  // Fire lead notification for high-value routes on first real message
+  if (['pricing', 'book'].includes(route) && messages.length <= 2) {
+    const firstMsg = messages.find(m => m.role === 'user')?.content || init || '';
+    notifyLead(env, route, firstMsg);
+  }
 
   let apiMessages = messages.filter(m => m.role && m.content && m.role !== 'system');
   if (apiMessages.length === 0) {
